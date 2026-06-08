@@ -16,8 +16,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from changelog_tool.commands import print_config_summary
+
 if TYPE_CHECKING:
     from changelog_tool.cli import CliContext
+    from changelog_tool.config import Config
 
 _INTENDED_OUTPUTS = (
     "06_changelog_items.jsonl",
@@ -27,13 +30,23 @@ _INTENDED_OUTPUTS = (
 
 
 def run_report(ctx: "CliContext") -> int:
-    """Run the ``report`` command (stub for T0)."""
+    """Run the ``report`` command.
 
+    Loads the resolved configuration and dispatches to :func:`_report`.
+    Pipeline logic for stages 6-7 lands in later tasks.
+    """
+
+    from changelog_tool.cli import run_with_config
+
+    return run_with_config(ctx, _report)
+
+
+def _report(ctx: "CliContext", config: "Config") -> int:
     print("changelog-tool report")
     print("Stages: 6 (changelog items), 7 (final report)")
-    print(f"Config: {ctx.config_path}")
+    print_config_summary(config)
     print("Intended outputs:")
     for name in _INTENDED_OUTPUTS:
-        print(f"  .changelog/{name}")
-    print("Not yet implemented (T0 skeleton).")
+        print(f"  {config.output.workdir}/{name}")
+    print("Not yet implemented (pipeline stages added in later tasks).")
     return 0

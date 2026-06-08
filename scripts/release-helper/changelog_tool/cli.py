@@ -19,13 +19,15 @@ import sys
 from typing import Callable, List, Optional, Sequence
 
 from changelog_tool import __version__
+from changelog_tool.config import Config, ConfigError, apply_overrides, load_config
 
 DEFAULT_CONFIG_PATH = "changelog.yaml"
 
-# Exit codes. The full error taxonomy is defined in T12; T0 only needs a small
+# Exit codes. The full error taxonomy is defined in T12; for now we keep a small
 # set of stable codes so the skeleton behaves predictably.
 EXIT_OK = 0
 EXIT_USAGE = 2
+EXIT_CONFIG = 3
 
 
 @dataclasses.dataclass
@@ -165,6 +167,43 @@ def _build_context(args: argparse.Namespace) -> CliContext:
     )
 
 
+def load_resolved_config(ctx: CliContext) -> Config:
+    """Load the config for ``ctx`` and apply CLI overrides.
+
+    Raises :class:`changelog_tool.config.ConfigError` on any problem; command
+    handlers are expected to translate that into a clean error + exit code via
+    :func:`run_with_config`.
+    """
+
+    config = load_config(ctx.config_path)
+    apply_overrides(
+        config,
+        from_ref=ctx.from_ref,
+        to_ref=ctx.to_ref,
+        workdir=ctx.workdir,
+    )
+    return config
+
+
+def run_with_config(ctx: CliContext, runner: "Callable[[CliContext, Config], int]") -> int:
+    """Load the resolved config and invoke ``runner``, handling config errors.
+
+    On :class:`ConfigError`, prints ``ERROR: <message>`` to stderr and returns
+    :data:`EXIT_CONFIG`. Configuration warnings are printed to stderr.
+    """
+
+    try:
+        config = load_resolved_config(ctx)
+    except ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+
+    for warning in config.warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
+
+    return runner(ctx, config)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point. Returns a process exit code."""
 
@@ -191,7 +230,10 @@ __all__: List[str] = [
     "build_parser",
     "main",
     "run",
+    "load_resolved_config",
+    "run_with_config",
     "DEFAULT_CONFIG_PATH",
     "EXIT_OK",
     "EXIT_USAGE",
+    "EXIT_CONFIG",
 ]

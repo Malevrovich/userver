@@ -22,8 +22,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from changelog_tool.commands import print_config_summary
+
 if TYPE_CHECKING:
     from changelog_tool.cli import CliContext
+    from changelog_tool.config import Config
 
 _INTENDED_OUTPUTS = (
     "01_commits.jsonl",
@@ -37,15 +40,23 @@ _INTENDED_OUTPUTS = (
 
 
 def run_collect(ctx: "CliContext") -> int:
-    """Run the ``collect`` command (stub for T0)."""
+    """Run the ``collect`` command.
 
+    Loads the resolved configuration and dispatches to :func:`_collect`.
+    Pipeline logic for stages 1-4 lands in later tasks.
+    """
+
+    from changelog_tool.cli import run_with_config
+
+    return run_with_config(ctx, _collect)
+
+
+def _collect(ctx: "CliContext", config: "Config") -> int:
     print("changelog-tool collect")
     print("Stages: 1 (collect), 2 (contributors), 3 (pre-classify), 4 (LLM)")
-    print(f"Config: {ctx.config_path}")
-    if ctx.from_ref or ctx.to_ref:
-        print(f"Range override: {ctx.from_ref or '<config>'}..{ctx.to_ref or '<config>'}")
+    print_config_summary(config)
     print("Intended outputs:")
     for name in _INTENDED_OUTPUTS:
-        print(f"  .changelog/{name}")
-    print("Not yet implemented (T0 skeleton).")
+        print(f"  {config.output.workdir}/{name}")
+    print("Not yet implemented (pipeline stages added in later tasks).")
     return 0
