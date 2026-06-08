@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Executable entry point for the changelog-tool CLI.
+
+Allows running the tool directly without installing the package:
+
+    ./scripts/release-helper/changelog-tool --help
+
+It ensures the directory containing the ``changelog_tool`` package is on
+``sys.path`` and delegates to :func:`changelog_tool.cli.run`.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from changelog_tool.cli import run  # noqa: E402  (path set up above)
+
+if __name__ == "__main__":
+    run()
