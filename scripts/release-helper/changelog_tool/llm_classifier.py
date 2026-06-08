@@ -45,8 +45,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from changelog_tool.io import read_json, write_json_atomic, write_jsonl
 from changelog_tool.llm.base import LlmClient
 from changelog_tool.llm.context import commit_to_context, maybe_attach_diff
-from changelog_tool.llm.errors import LlmError, LlmResponseError, LlmTransientError
 from changelog_tool.llm.parsing import parse_classification_response
+from changelog_tool.llm.retry import TokenBucket, execute_with_retry
 from changelog_tool.llm.prompts import build_classification_prompt, estimate_chars
 from changelog_tool.models import (
     Commit,
@@ -90,55 +90,6 @@ _OVERSIZED_FALLBACK = _fallback_classification(
 _INVALID_JSON_FALLBACK = _fallback_classification(
     "LLM returned invalid JSON for this batch."
 )
-
-
-# ---------------------------------------------------------------------------
-# Token-bucket rate limiter
-# ---------------------------------------------------------------------------
-
-
-class _TokenBucket:
-    """Simple async token-bucket rate limiter.
-
-    Args:
-        rate: Target requests per second (0 = unlimited).
-    """
-
-    def __init__(self, rate: float) -> None:
-        self._rate = rate  # tokens per second
-        # Start with 1 token so the first request is free; subsequent requests
-        # must wait for the bucket to refill at `rate` tokens/second.
-        self._tokens: float = 1.0 if rate > 0 else 0.0
-        self._last_refill = time.monotonic()
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> None:
-        """Wait until a token is available, then consume it.
-
-        The lock is held for the entire duration including the sleep so that
-        concurrent callers are serialized and each waits its fair share.
-        """
-        if self._rate <= 0:
-            return  # unlimited
-
-        async with self._lock:
-            now = time.monotonic()
-            elapsed = now - self._last_refill
-            self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
-            self._last_refill = now
-
-            if self._tokens >= 1.0:
-                self._tokens -= 1.0
-                return
-
-            # Need to wait for the next token.  Sleep while holding the lock
-            # so that the next caller waits until this one has finished.
-            wait_time = (1.0 - self._tokens) / self._rate
-            self._tokens = 0.0
-            await asyncio.sleep(wait_time)
-            # Update last_refill after sleeping so the next caller gets a
-            # fresh refill calculation from the correct baseline.
-            self._last_refill = time.monotonic()
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +221,7 @@ async def _process_batch(
     classifications: Dict[str, LlmClassification],
     classifications_lock: asyncio.Lock,
     semaphore: asyncio.Semaphore,
-    rate_limiter: _TokenBucket,
+    rate_limiter: TokenBucket,
     repo_path: str,
     include_diff: bool,
     diff_max_chars: int,
@@ -316,11 +267,15 @@ async def _process_batch(
 
     # Acquire rate-limit token and concurrency slot.
     await rate_limiter.acquire()
+    
+    async def _do_classify() -> Dict[str, LlmClassification]:
+        response = await client.async_complete(request)
+        result_list = parse_classification_response(response.text, sha_list)
+        return {sha: cls for sha, cls in zip(sha_list, result_list)}
+
     async with semaphore:
-        result_classifications, error = await _classify_with_retry_async(
-            client=client,
-            request=request,
-            sha_list=sha_list,
+        result_classifications, error = await execute_with_retry(
+            operation=_do_classify,
             batch_id=batch_id,
             verbose=verbose,
             max_rps=max_rps,
@@ -366,102 +321,6 @@ async def _process_batch(
             )
             _save_state(state_path, state)
             return False, True
-
-
-async def _classify_with_retry_async(
-    client: LlmClient,
-    request: Any,
-    sha_list: List[str],
-    batch_id: str,
-    verbose: bool,
-    max_rps: float = 0.0,
-    max_429_retries: int = 5,
-) -> Tuple[Optional[Dict[str, LlmClassification]], Optional[str]]:
-    """Try to classify via *client* with two separate retry policies.
-
-    **429 rate-limit retries** (up to *max_429_retries*):
-    When the backend raises :class:`~changelog_tool.llm.errors.LlmTransientError`
-    with ``is_rate_limit=True``, wait ``max(retry_after, 1/max_rps)`` seconds
-    (exponential backoff if no ``Retry-After`` header) and retry.  These retries
-    do **not** count against the one-shot non-429 retry budget.
-
-    **Non-429 transient / response-error retry** (once):
-    Any other :class:`~changelog_tool.llm.errors.LlmTransientError` or
-    :class:`~changelog_tool.llm.errors.LlmResponseError` is retried exactly
-    once.  On second failure, return ``(None, error_message)`` so the caller
-    can write fallback ``unclear``.
-
-    **Permanent errors** (:class:`~changelog_tool.llm.errors.LlmError`):
-    Not retried; return ``(None, error_message)`` immediately.
-    """
-    # Minimum wait between 429 retries derived from the configured RPS.
-    min_rps_wait = (1.0 / max_rps) if max_rps > 0 else 0.0
-
-    non_429_attempts = 0
-    error_msg: Optional[str] = None
-
-    while True:
-        try:
-            response = await client.async_complete(request)
-            result_list = parse_classification_response(response.text, sha_list)
-            return {sha: cls for sha, cls in zip(sha_list, result_list)}, None
-
-        except LlmTransientError as exc:
-            error_msg = str(exc)
-
-            if exc.is_rate_limit:
-                # --- 429 path ---
-                if max_429_retries <= 0:
-                    print(
-                        f"    {batch_id}: 429 rate limit, max_429_retries=0, "
-                        f"falling back to unclear."
-                    )
-                    return None, error_msg
-
-                # Compute wait: honour Retry-After, but at least 1/max_rps.
-                retry_after = exc.retry_after or 0.0
-                wait = max(retry_after, min_rps_wait)
-                # Exponential backoff floor: at least 1s if no header and no RPS.
-                if wait <= 0:
-                    wait = 1.0
-
-                max_429_retries -= 1
-                print(
-                    f"    {batch_id}: 429 rate limit, waiting {wait:.1f}s "
-                    f"({max_429_retries} retries left)..."
-                )
-                await asyncio.sleep(wait)
-                continue  # retry without counting against non-429 budget
-
-            else:
-                # --- Other transient error path ---
-                non_429_attempts += 1
-                if verbose or non_429_attempts >= 2:
-                    print(
-                        f"    {batch_id} attempt {non_429_attempts} failed: "
-                        f"{error_msg[:200]}"
-                    )
-                if non_429_attempts < 2:
-                    print(f"    {batch_id}: retrying...")
-                    continue
-                return None, error_msg
-
-        except LlmResponseError as exc:
-            error_msg = str(exc)
-            non_429_attempts += 1
-            if verbose or non_429_attempts >= 2:
-                print(
-                    f"    {batch_id} attempt {non_429_attempts} failed "
-                    f"(invalid response): {error_msg[:200]}"
-                )
-            if non_429_attempts < 2:
-                print(f"    {batch_id}: retrying...")
-                continue
-            return None, error_msg
-
-        except LlmError as exc:
-            # Permanent error — do not retry.
-            return None, str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -614,7 +473,7 @@ async def _run_async(
         print(f"  Concurrency: {max_concurrency} (no rate limit)")
 
     semaphore = asyncio.Semaphore(max_concurrency)
-    rate_limiter = _TokenBucket(max_rps)
+    rate_limiter = TokenBucket(max_rps)
     state_lock = asyncio.Lock()
     classifications_lock = asyncio.Lock()
 
