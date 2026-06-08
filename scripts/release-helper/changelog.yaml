@@ -5,7 +5,7 @@ repo:
   local_path: ../..
 
 range:
-  from: HEAD~20  # T1 - config
+  from: v3.0.0
   to: HEAD
 
 thresholds:
@@ -13,27 +13,18 @@ thresholds:
   bugfix_skip: 200
 
 llm:
+  backend: http_api
   batch_size: 20
   max_prompt_chars: 50000
-  backend: http_api   # http_api (default) | fake
-  include_diff: true  # attach bounded git-show diff to each commit context (http_api only)
-  max_rps: 5          # target requests per second (0 = unlimited)
-  max_concurrency: 4  # max parallel LLM requests (default: 1)
-  # model: gpt-4o-mini  # provider/model string; uses CHANGELOG_LLM_MODEL env var if unset
-  # diff_max_chars: 20000
-  #
-  # Parallelism:
-  #
-  # Credentials (or use CLI flags --llm-api-key / --llm-base-url / --llm-model):
-  #   CHANGELOG_LLM_API_KEY   — API key (required)
-  #   CHANGELOG_LLM_BASE_URL  — base URL of the API endpoint
-  #   CHANGELOG_LLM_MODEL     — model override (optional, overrides llm.model above)
+  max_rps: 5.0          # Target requests per second (0 = unlimited)
+  max_concurrency: 5    # Max concurrent LLM requests
+  max_429_retries: 5    # How many times to retry on 429 Rate Limit
 
 core_team:
-  emails:
-    - ivan-skryabin@yandex-team.com
-    - dddccc20000@mail.ru
-    - antonyzhilin@userver.tech
+  email_regexes:
+    - "@yandex-team\\.(com|ru)$"
+    - "dddccc20000@mail\\.ru$"
+    - "antonyzhilin@userver\\.tech$"
 
 output:
   workdir: .changelog

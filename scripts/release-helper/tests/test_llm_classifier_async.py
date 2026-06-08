@@ -323,7 +323,7 @@ llm:
   max_rps: 3.5
   max_concurrency: 8
 core_team:
-  emails: []
+  email_regexes: []
 output:
   workdir: .changelog
 """)
@@ -347,7 +347,7 @@ llm:
   max_prompt_chars: 10000
   max_rps: 0
 core_team:
-  emails: []
+  email_regexes: []
 output:
   workdir: .changelog
 """)
@@ -369,7 +369,7 @@ llm:
   max_prompt_chars: 10000
   max_rps: -1
 core_team:
-  emails: []
+  email_regexes: []
 output:
   workdir: .changelog
 """)

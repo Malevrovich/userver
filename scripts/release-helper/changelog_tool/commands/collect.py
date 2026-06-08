@@ -184,12 +184,26 @@ def _run_stage2(config: "Config") -> int:
         print(f"ERROR: could not read {commits_path}: {exc}", file=sys.stderr)
         return 1
 
-    core_emails: Set[str] = {e.lower() for e in config.core_team.emails}
+    import re
+
+    compiled_regexes = []
+    for pattern in config.core_team.email_regexes:
+        try:
+            compiled_regexes.append(re.compile(pattern, re.IGNORECASE))
+        except re.error as exc:
+            print(f"ERROR: invalid regex in core_team.email_regexes '{pattern}': {exc}", file=sys.stderr)
+            return 1
+
+    def _is_external(email: str) -> bool:
+        for regex in compiled_regexes:
+            if regex.search(email):
+                return False
+        return True
 
     for commit in commits:
-        commit.is_external = commit.author_email.lower() not in core_emails
+        commit.is_external = _is_external(commit.author_email)
         for ca in commit.co_authors:
-            ca.is_external = ca.email.lower() not in core_emails
+            ca.is_external = _is_external(ca.email)
 
     workdir = config.output.workdir
 
