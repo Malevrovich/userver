@@ -184,13 +184,19 @@ class TestCollectCommits:
         for c in commits:
             assert c.is_merge_commit is False
 
-    def test_github_fields_are_none(self, repo):
-        """Stage-2 fields must be None after stage 1."""
+    def test_is_external_none_after_stage1(self, repo):
+        """Stage-2 field must be None after stage 1."""
         commits = collect_commits(repo, "v0", "HEAD", "https://github.com/org/repo")
         for c in commits:
-            assert c.github_login is None
-            assert c.github_profile_url is None
             assert c.is_external is None
+
+
+
+
+
+
+
+
 
     def test_classification_fields_are_none(self, repo):
         """Stage-3/4 fields must be None after stage 1."""
@@ -324,11 +330,9 @@ class TestParseCoAuthors:
         assert len(result) == 1
         assert result[0].name == "Carol"
 
-    def test_github_fields_are_none(self):
+    def test_is_external_is_none(self):
         body = "Co-authored-by: Dave <dave@example.com>"
         result = _parse_co_authors(body)
-        assert result[0].github_login is None
-        assert result[0].github_profile_url is None
         assert result[0].is_external is None
 
     def test_name_with_spaces(self):

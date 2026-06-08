@@ -67,7 +67,7 @@ class LlmConfig:
 
 @dataclasses.dataclass
 class CoreTeamConfig:
-    logins: List[str] = dataclasses.field(default_factory=list)
+    emails: List[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -178,19 +178,19 @@ def _parse_llm(data: Mapping[str, Any]) -> LlmConfig:
 
 def _parse_core_team(data: Mapping[str, Any]) -> CoreTeamConfig:
     section = _require_mapping(data.get("core_team"), "core_team")
-    raw_logins = section.get("logins", [])
-    if raw_logins is None:
-        raw_logins = []
-    if not isinstance(raw_logins, list):
-        raise ConfigError("field 'core_team.logins' must be a list of strings")
-    logins: List[str] = []
-    for item in raw_logins:
+    raw = section.get("emails", [])
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        raise ConfigError("field 'core_team.emails' must be a list of strings")
+    emails: List[str] = []
+    for item in raw:
         if not isinstance(item, str):
             raise ConfigError(
-                f"field 'core_team.logins' must contain only strings, got {type(item).__name__}"
+                f"field 'core_team.emails' must contain only strings, got {type(item).__name__}"
             )
-        logins.append(item)
-    return CoreTeamConfig(logins=logins)
+        emails.append(item)
+    return CoreTeamConfig(emails=emails)
 
 
 def _parse_output(data: Mapping[str, Any]) -> OutputConfig:

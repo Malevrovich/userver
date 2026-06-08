@@ -156,16 +156,11 @@ def category_to_section(category: LlmCategory) -> Optional[ChangelogSection]:
 
 @dataclasses.dataclass
 class CoAuthor:
-    """A co-author extracted from a ``Co-authored-by:`` trailer (Spec §5.5).
-
-    GitHub fields are ``None`` until stage 2 fills them.
-    """
+    """A co-author extracted from a ``Co-authored-by:`` trailer (Spec §5.5)."""
 
     name: str
     email: str
-    github_login: Optional[str] = None        # filled at stage 2
-    github_profile_url: Optional[str] = None  # filled at stage 2
-    is_external: Optional[bool] = None        # filled at stage 2
+    is_external: Optional[bool] = None  # filled at stage 2
 
 
 @dataclasses.dataclass
@@ -228,9 +223,7 @@ class Commit:
     size_score: int
     size_bucket: SizeBucket
 
-    # --- Stage 2: GitHub contributor resolution ---
-    github_login: Optional[str] = None
-    github_profile_url: Optional[str] = None
+    # --- Stage 2: contributor resolution ---
     is_external: Optional[bool] = None
 
     # --- Stage 3: heuristic pre-classification ---
@@ -258,8 +251,6 @@ class VerifiedCommit:
 
     author_name: str
     author_email: str
-    github_login: Optional[str]
-    github_profile_url: Optional[str]
     is_external: bool
     co_authors: List[CoAuthor]
 
@@ -291,8 +282,8 @@ class ChangelogItem:
     category: LlmCategory
     changelog_section: ChangelogSection
     changelog_line: str
-    author_login: Optional[str]
-    author_profile_url: Optional[str]
+    author_name: str
+    author_email: str
     co_authors: List[CoAuthor]
     is_external: bool
     commit_url: str
@@ -332,8 +323,6 @@ def _co_author_from_dict(d: Dict[str, Any]) -> CoAuthor:
     return CoAuthor(
         name=d["name"],
         email=d["email"],
-        github_login=d.get("github_login"),
-        github_profile_url=d.get("github_profile_url"),
         is_external=d.get("is_external"),
     )
 
@@ -382,8 +371,6 @@ def commit_from_dict(d: Dict[str, Any]) -> Commit:
         files_count=d["files_count"],
         size_score=d["size_score"],
         size_bucket=SizeBucket(d["size_bucket"]),
-        github_login=d.get("github_login"),
-        github_profile_url=d.get("github_profile_url"),
         is_external=d.get("is_external"),
         auto_classification=(
             _auto_classification_from_dict(raw_ac) if raw_ac is not None else None
@@ -404,8 +391,6 @@ def verified_commit_from_dict(d: Dict[str, Any]) -> VerifiedCommit:
         commit_url=d["commit_url"],
         author_name=d["author_name"],
         author_email=d["author_email"],
-        github_login=d.get("github_login"),
-        github_profile_url=d.get("github_profile_url"),
         is_external=d["is_external"],
         co_authors=[_co_author_from_dict(c) for c in d.get("co_authors", [])],
         changed_files=d.get("changed_files", []),
@@ -433,8 +418,8 @@ def changelog_item_from_dict(d: Dict[str, Any]) -> ChangelogItem:
         category=LlmCategory(d["category"]),
         changelog_section=ChangelogSection(d["changelog_section"]),
         changelog_line=d["changelog_line"],
-        author_login=d.get("author_login"),
-        author_profile_url=d.get("author_profile_url"),
+        author_name=d.get("author_name", ""),
+        author_email=d.get("author_email", ""),
         co_authors=[_co_author_from_dict(c) for c in d.get("co_authors", [])],
         is_external=d["is_external"],
         commit_url=d["commit_url"],

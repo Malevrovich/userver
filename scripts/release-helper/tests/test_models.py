@@ -29,6 +29,10 @@ from changelog_tool.models import (
     verified_commit_from_dict,
 )
 
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
 
 # ---------------------------------------------------------------------------
 # compute_size_score
@@ -176,7 +180,7 @@ class TestToDict:
         )
         d = to_dict(commit)
         assert d["co_authors"][0]["name"] == "Bob"
-        assert d["co_authors"][0]["github_login"] is None
+        assert "github_login" not in d["co_authors"][0]
 
     def test_auto_classification_nested(self):
         ac = AutoClassification(
@@ -196,7 +200,7 @@ class TestToDict:
     def test_none_optional_fields(self):
         commit = _make_minimal_commit()
         d = to_dict(commit)
-        assert d["github_login"] is None
+        assert d["is_external"] is None
         assert d["auto_classification"] is None
         assert d["llm_classification"] is None
 
@@ -219,21 +223,12 @@ class TestCommitFromDict:
 
     def test_with_co_author(self):
         original = _make_minimal_commit(
-            co_authors=[
-                CoAuthor(
-                    name="Bob",
-                    email="bob@example.com",
-                    github_login="bob-gh",
-                    github_profile_url="https://github.com/bob-gh",
-                    is_external=True,
-                )
-            ]
+            co_authors=[CoAuthor(name="Bob", email="bob@example.com", is_external=True)]
         )
         restored = self._round_trip(original)
         assert len(restored.co_authors) == 1
         ca = restored.co_authors[0]
         assert ca.name == "Bob"
-        assert ca.github_login == "bob-gh"
         assert ca.is_external is True
 
     def test_with_auto_classification(self):
@@ -265,14 +260,9 @@ class TestCommitFromDict:
         assert restored.llm_classification.category == LlmCategory.FEATURE
         assert restored.llm_classification.changelog_line == "Added feature X."
 
-    def test_github_fields(self):
-        original = _make_minimal_commit(
-            github_login="alice-gh",
-            github_profile_url="https://github.com/alice-gh",
-            is_external=False,
-        )
+    def test_is_external_field(self):
+        original = _make_minimal_commit(is_external=False)
         restored = self._round_trip(original)
-        assert restored.github_login == "alice-gh"
         assert restored.is_external is False
 
 
@@ -290,8 +280,6 @@ def _make_verified_commit(**overrides) -> VerifiedCommit:
         commit_url="https://github.com/org/repo/commit/" + "b" * 40,
         author_name="Carol",
         author_email="carol@example.com",
-        github_login="carol-gh",
-        github_profile_url="https://github.com/carol-gh",
         is_external=False,
         co_authors=[],
         changed_files=["src/perf.cpp"],
@@ -347,8 +335,8 @@ def _make_changelog_item(**overrides) -> ChangelogItem:
         category=LlmCategory.FEATURE,
         changelog_section=ChangelogSection.FUNCTIONALITY,
         changelog_line="Added Redis pipelining support.",
-        author_login="alice-gh",
-        author_profile_url="https://github.com/alice-gh",
+        author_name="Alice",
+        author_email="alice@example.com",
         co_authors=[],
         is_external=False,
         commit_url="https://github.com/org/repo/commit/" + "c" * 40,
