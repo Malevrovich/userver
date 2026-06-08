@@ -45,6 +45,11 @@ class CliContext:
     to_ref: Optional[str] = None
     workdir: Optional[str] = None
     verbose: bool = False
+    # LLM connection overrides (http_api backend).
+    # If not provided here or via env vars, the factory will prompt interactively.
+    llm_api_key: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
 
 
 # A command handler takes a CliContext and returns a process exit code.
@@ -90,6 +95,36 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         dest="verbose",
         action="store_true",
         help="enable verbose output",
+    )
+    parser.add_argument(
+        "--llm-api-key",
+        dest="llm_api_key",
+        metavar="KEY",
+        help=(
+            "LLM API key for the http_api backend. "
+            "Falls back to CHANGELOG_LLM_API_KEY env var; "
+            "prompted interactively if neither is set."
+        ),
+    )
+    parser.add_argument(
+        "--llm-base-url",
+        dest="llm_base_url",
+        metavar="URL",
+        help=(
+            "Base URL of the LLM API endpoint (e.g. https://api.openai.com/v1). "
+            "Falls back to CHANGELOG_LLM_BASE_URL env var; "
+            "prompted interactively if neither is set."
+        ),
+    )
+    parser.add_argument(
+        "--llm-model",
+        dest="llm_model",
+        metavar="MODEL",
+        help=(
+            "Model identifier in provider/model format "
+            "(e.g. gpt-4o-mini). "
+            "Falls back to CHANGELOG_LLM_MODEL env var, then llm.model in config."
+        ),
     )
 
 
@@ -164,6 +199,9 @@ def _build_context(args: argparse.Namespace) -> CliContext:
         to_ref=pick("to_ref"),
         workdir=pick("workdir"),
         verbose=bool(pick("verbose", False)),
+        llm_api_key=pick("llm_api_key") or None,
+        llm_base_url=pick("llm_base_url") or None,
+        llm_model=pick("llm_model") or None,
     )
 
 

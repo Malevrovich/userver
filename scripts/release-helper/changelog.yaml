@@ -5,7 +5,7 @@ repo:
   local_path: ../..
 
 range:
-  from: 332799e3b82e4b84cc1d7a290cac8e7556eaba18  # T1 - config
+  from: HEAD~2  # T1 - config
   to: HEAD
 
 thresholds:
@@ -15,6 +15,15 @@ thresholds:
 llm:
   batch_size: 20
   max_prompt_chars: 50000
+  backend: http_api   # http_api (default) | fake
+  include_diff: true  # attach bounded git-show diff to each commit context (http_api only)
+  # model: gpt-4o-mini  # provider/model string; uses CHANGELOG_LLM_MODEL env var if unset
+  # diff_max_chars: 20000
+  #
+  # Required environment variables for http_api backend:
+  #   CHANGELOG_LLM_API_KEY   — API key (required)
+  #   CHANGELOG_LLM_BASE_URL  — base URL (optional, defaults to OpenAI endpoint)
+  #   CHANGELOG_LLM_MODEL     — model override (optional, overrides llm.model above)
 
 core_team:
   emails:

@@ -59,10 +59,27 @@ class ThresholdsConfig:
     bugfix_skip: int = DEFAULT_BUGFIX_SKIP
 
 
+# Allowed backend names.
+LLM_BACKEND_HTTP_API = "http_api"
+LLM_BACKEND_FAKE = "fake"
+_KNOWN_LLM_BACKENDS = frozenset({LLM_BACKEND_HTTP_API, LLM_BACKEND_FAKE})
+
+DEFAULT_LLM_BACKEND = LLM_BACKEND_HTTP_API
+DEFAULT_INCLUDE_DIFF = False
+DEFAULT_DIFF_MAX_CHARS = 20000
+
+
 @dataclasses.dataclass
 class LlmConfig:
     batch_size: int = DEFAULT_BATCH_SIZE
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS
+    # Backend selection (Spec §16 — provider not fixed).
+    backend: str = DEFAULT_LLM_BACKEND
+    # Optional model string in "provider/model" format; backend-specific default if None.
+    model: Optional[str] = None
+    # Whether to attach a bounded git-show diff to each commit context (http_api only).
+    include_diff: bool = DEFAULT_INCLUDE_DIFF
+    diff_max_chars: int = DEFAULT_DIFF_MAX_CHARS
 
 
 @dataclasses.dataclass
@@ -168,11 +185,34 @@ def _parse_thresholds(data: Mapping[str, Any]) -> ThresholdsConfig:
 
 def _parse_llm(data: Mapping[str, Any]) -> LlmConfig:
     section = _require_mapping(data.get("llm"), "llm")
+
+    backend = _optional_str(section, "backend", "llm", DEFAULT_LLM_BACKEND)
+    if backend not in _KNOWN_LLM_BACKENDS:
+        raise ConfigError(
+            f"field 'llm.backend' must be one of {sorted(_KNOWN_LLM_BACKENDS)}, got '{backend}'"
+        )
+
+    model_raw = section.get("model")
+    if model_raw is not None and not isinstance(model_raw, str):
+        raise ConfigError(
+            f"field 'llm.model' must be a string, got {type(model_raw).__name__}"
+        )
+    model: Optional[str] = model_raw if model_raw else None
+
+    include_diff_raw = section.get("include_diff", DEFAULT_INCLUDE_DIFF)
+    if not isinstance(include_diff_raw, bool):
+        raise ConfigError("field 'llm.include_diff' must be a boolean")
+    include_diff: bool = include_diff_raw
+
     return LlmConfig(
         batch_size=_positive_int(section, "batch_size", "llm", DEFAULT_BATCH_SIZE),
         max_prompt_chars=_positive_int(
             section, "max_prompt_chars", "llm", DEFAULT_MAX_PROMPT_CHARS
         ),
+        backend=backend,
+        model=model,
+        include_diff=include_diff,
+        diff_max_chars=_positive_int(section, "diff_max_chars", "llm", DEFAULT_DIFF_MAX_CHARS),
     )
 
 
@@ -272,4 +312,7 @@ __all__ = [
     "ConfigError",
     "load_config",
     "apply_overrides",
+    # LLM backend constants
+    "LLM_BACKEND_HTTP_API",
+    "LLM_BACKEND_FAKE",
 ]
