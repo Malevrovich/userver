@@ -3,7 +3,7 @@
 Stages:
     1. Collect commits from git history.              ← T3
     2. Identify external contributors.                ← T4
-    3. Automatic pre-classification via heuristics.   ← T5 (this file)
+    3. Automatic pre-classification via heuristics.   ← T5
     4. LLM analysis of remaining commits (resumable). ← T7
 
 Outputs created by this command:
@@ -12,8 +12,8 @@ Outputs created by this command:
     .changelog/02_commits_with_contributors.jsonl
     .changelog/02_external_contributors.md
     .changelog/03_preclassified.jsonl
-    .changelog/04_llm_classified.jsonl             (T7)
-    .changelog/04_llm_classification_state.json    (T7)
+    .changelog/04_llm_classified.jsonl
+    .changelog/04_llm_classification_state.json
 """
 
 from __future__ import annotations
@@ -31,6 +31,9 @@ from changelog_tool.io import (
     write_json_atomic,
     write_jsonl,
 )
+from changelog_tool.llm.errors import LlmError
+from changelog_tool.llm.factory import build_client
+from changelog_tool.llm_classifier import run_llm_classification
 from changelog_tool.models import Commit, commit_from_dict, to_dict
 
 if TYPE_CHECKING:
@@ -84,14 +87,9 @@ def _collect(ctx: "CliContext", config: "Config") -> int:
         return exit_code
 
     # ------------------------------------------------------------------
-    # Stage 4: LLM classification (stub — implemented in T7)
+    # Stage 4: LLM classification (resumable)
     # ------------------------------------------------------------------
-    print()
-    print("Stage 4 (LLM): not yet implemented.")
-    print()
-    print("Next:")
-    print("  changelog-tool review")
-    return 0
+    return _run_stage4(ctx, config)
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +292,114 @@ def _run_stage3(config: "Config") -> int:
     print(f"\n  Heuristics filtered: {skipped}")
     print(f"  Sent to LLM:         {send_to_llm}")
 
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Stage 4
+# ---------------------------------------------------------------------------
+
+
+def _run_stage4(ctx: "CliContext", config: "Config") -> int:
+    """Stage 4: resumable LLM classification.
+
+    Reads:
+        <workdir>/03_preclassified.jsonl
+
+    Writes:
+        <workdir>/04_llm_classified.jsonl
+        <workdir>/04_llm_classification_state.json
+
+    Returns 0 on success, non-zero on error.
+    """
+    print("\nLLM classification (stage 4)...")
+
+    preclassified_path = os.path.join(config.output.workdir, "03_preclassified.jsonl")
+    try:
+        commits = [commit_from_dict(d) for d in read_jsonl(preclassified_path)]
+    except (OSError, Exception) as exc:
+        print(f"ERROR: could not read {preclassified_path}: {exc}", file=sys.stderr)
+        return 1
+
+    send_to_llm_count = sum(
+        1 for c in commits
+        if c.auto_classification is not None and c.auto_classification.send_to_llm
+    )
+
+    if send_to_llm_count == 0:
+        print("  No commits require LLM analysis — skipping.")
+        # Write empty artifacts so downstream stages don't fail.
+        state_path = os.path.join(config.output.workdir, "04_llm_classification_state.json")
+        classified_path = os.path.join(config.output.workdir, "04_llm_classified.jsonl")
+        from changelog_tool.io import write_json_atomic
+        write_json_atomic(state_path, {
+            "operation": "llm_classification",
+            "from_ref": config.range.from_ref,
+            "to_ref": config.range.to_ref,
+            "batches": {},
+        })
+        write_jsonl(classified_path, [])
+        print(f"  Written: {state_path}")
+        print(f"  Written: {classified_path}")
+        print("\nNext:\n  changelog-tool review")
+        return 0
+
+    # Check whether we are resuming.
+    state_path = os.path.join(config.output.workdir, "04_llm_classification_state.json")
+    if os.path.exists(state_path):
+        print("  Resuming LLM classification...")
+    else:
+        print(f"  Commits to classify: {send_to_llm_count}")
+
+    # Build the LLM client (resolves credentials from CLI flags → env → prompt).
+    try:
+        client = build_client(
+            config.llm,
+            api_key=ctx.llm_api_key,
+            base_url=ctx.llm_base_url,
+            model=ctx.llm_model,
+        )
+    except LlmError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    classified_path = os.path.join(config.output.workdir, "04_llm_classified.jsonl")
+
+    try:
+        result = run_llm_classification(
+            commits=commits,
+            client=client,
+            state_path=state_path,
+            classified_path=classified_path,
+            batch_size=config.llm.batch_size,
+            max_prompt_chars=config.llm.max_prompt_chars,
+            max_rps=config.llm.max_rps,
+            max_concurrency=config.llm.max_concurrency,
+            max_429_retries=config.llm.max_429_retries,
+            from_ref=config.range.from_ref,
+            to_ref=config.range.to_ref,
+            repo_path=config.repo.local_path,
+            include_diff=config.llm.include_diff,
+            diff_max_chars=config.llm.diff_max_chars,
+            verbose=ctx.verbose,
+        )
+    except LlmError as exc:
+        print(f"ERROR: LLM classification failed: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR: unexpected error during LLM classification: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\n  Written: {state_path}")
+    print(f"  Written: {classified_path}")
+
+    # Print spec §13.1 summary.
+    print(f"\nLLM batches:")
+    print(f"  done:    {result.batches_done}")
+    print(f"  failed:  {result.batches_failed} (fallback unclear applied)")
+    print(f"  skipped: {result.batches_skipped_already_done} (already done)")
+
+    print("\nNext:\n  changelog-tool review")
     return 0
 
 

@@ -157,6 +157,15 @@ class HttpApiBackend(LlmClient):
             except Exception:  # noqa: BLE001
                 error_body = "(could not read error body)"
 
+            if status == 429:
+                # Parse Retry-After header (seconds or HTTP-date).
+                retry_after = _parse_retry_after(exc)
+                raise LlmTransientError(
+                    f"HTTP 429 rate limit from LLM API: {error_body[:200]}",
+                    is_rate_limit=True,
+                    retry_after=retry_after,
+                ) from exc
+
             if status in _TRANSIENT_STATUS_CODES:
                 raise LlmTransientError(
                     f"HTTP {status} from LLM API: {error_body[:500]}"
@@ -199,9 +208,49 @@ class HttpApiBackend(LlmClient):
             ) from exc
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_retry_after(exc: urllib.error.HTTPError) -> Optional[float]:
+    """Extract the ``Retry-After`` value from an HTTP error response.
+
+    Supports both integer-seconds and HTTP-date formats.
+
+    Returns:
+        Number of seconds to wait, or ``None`` if the header is absent or
+        cannot be parsed.
+    """
+    try:
+        headers = exc.headers
+        if headers is None:
+            return None
+        raw = headers.get("Retry-After") or headers.get("retry-after")
+        if not raw:
+            return None
+        raw = raw.strip()
+        # Integer seconds.
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+        # HTTP-date format (e.g. "Wed, 21 Oct 2015 07:28:00 GMT").
+        import email.utils
+        import time as _time
+        parsed = email.utils.parsedate(raw)
+        if parsed is not None:
+            wait = _time.mktime(parsed) - _time.time()
+            return max(0.0, wait)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 __all__ = [
     "HttpApiBackend",
     "ENV_API_KEY",
     "ENV_BASE_URL",
     "ENV_MODEL",
+    "_parse_retry_after",
 ]

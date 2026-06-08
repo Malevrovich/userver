@@ -67,6 +67,11 @@ _KNOWN_LLM_BACKENDS = frozenset({LLM_BACKEND_HTTP_API, LLM_BACKEND_FAKE})
 DEFAULT_LLM_BACKEND = LLM_BACKEND_HTTP_API
 DEFAULT_INCLUDE_DIFF = False
 DEFAULT_DIFF_MAX_CHARS = 20000
+# Parallelism defaults: no rate limit, 1 concurrent request (safe default).
+DEFAULT_MAX_RPS = 0       # 0 = unlimited
+DEFAULT_MAX_CONCURRENCY = 1
+# 429 retry: retry up to this many times before falling back to unclear.
+DEFAULT_MAX_429_RETRIES = 5
 
 
 @dataclasses.dataclass
@@ -80,6 +85,11 @@ class LlmConfig:
     # Whether to attach a bounded git-show diff to each commit context (http_api only).
     include_diff: bool = DEFAULT_INCLUDE_DIFF
     diff_max_chars: int = DEFAULT_DIFF_MAX_CHARS
+    # Parallelism: target requests-per-second (0 = unlimited) and max concurrent requests.
+    max_rps: float = DEFAULT_MAX_RPS
+    max_concurrency: int = DEFAULT_MAX_CONCURRENCY
+    # How many times to retry a 429 response before falling back to unclear.
+    max_429_retries: int = DEFAULT_MAX_429_RETRIES
 
 
 @dataclasses.dataclass
@@ -204,6 +214,14 @@ def _parse_llm(data: Mapping[str, Any]) -> LlmConfig:
         raise ConfigError("field 'llm.include_diff' must be a boolean")
     include_diff: bool = include_diff_raw
 
+    # max_rps: 0 means unlimited; accepts int or float.
+    max_rps_raw = section.get("max_rps", DEFAULT_MAX_RPS)
+    if isinstance(max_rps_raw, bool) or not isinstance(max_rps_raw, (int, float)):
+        raise ConfigError("field 'llm.max_rps' must be a number (0 = unlimited)")
+    if float(max_rps_raw) < 0:
+        raise ConfigError("field 'llm.max_rps' must be >= 0")
+    max_rps: float = float(max_rps_raw)
+
     return LlmConfig(
         batch_size=_positive_int(section, "batch_size", "llm", DEFAULT_BATCH_SIZE),
         max_prompt_chars=_positive_int(
@@ -213,6 +231,13 @@ def _parse_llm(data: Mapping[str, Any]) -> LlmConfig:
         model=model,
         include_diff=include_diff,
         diff_max_chars=_positive_int(section, "diff_max_chars", "llm", DEFAULT_DIFF_MAX_CHARS),
+        max_rps=max_rps,
+        max_concurrency=_positive_int(
+            section, "max_concurrency", "llm", DEFAULT_MAX_CONCURRENCY
+        ),
+        max_429_retries=_positive_int(
+            section, "max_429_retries", "llm", DEFAULT_MAX_429_RETRIES
+        ),
     )
 
 

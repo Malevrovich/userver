@@ -1,15 +1,19 @@
 """Core interface types for the LLM abstraction layer.
 
 Defines the provider-neutral :class:`LlmRequest` / :class:`LlmResponse`
-dataclasses and the :class:`LlmClient` protocol that all backends implement.
+dataclasses and the :class:`LlmClient` base class that all backends implement.
 
 Design principles
 -----------------
 - One call = one prompt = one response.  Batching, retries, and state are the
   caller's responsibility (T7 / T10) so resumability logic lives in one place
   and is identical across backends.
-- The interface is intentionally minimal: ``complete(request) -> response``.
-  Backends may raise :class:`~changelog_tool.llm.errors.LlmTransientError` for
+- The interface exposes both a synchronous :meth:`complete` and an async
+  :meth:`async_complete`.  The default async implementation runs the sync
+  method in the default executor (thread pool), so backends only need to
+  override one of the two.  High-throughput backends (e.g. aiohttp) can
+  override :meth:`async_complete` directly.
+- Backends may raise :class:`~changelog_tool.llm.errors.LlmTransientError` for
   retryable failures or :class:`~changelog_tool.llm.errors.LlmError` for
   permanent ones.  JSON validation is **not** the backend's job — that belongs
   to :mod:`~changelog_tool.llm.parsing`.
@@ -18,6 +22,7 @@ Design principles
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 from typing import Any, Dict, Optional
 
@@ -66,10 +71,15 @@ class LlmResponse:
 
 
 class LlmClient:
-    """Protocol for LLM backends.
+    """Base class for LLM backends.
 
-    All backends must implement :meth:`complete`.  The method is synchronous;
-    async support is out of scope for this tool.
+    Backends must implement at least one of :meth:`complete` (sync) or
+    :meth:`async_complete` (async).
+
+    The default :meth:`async_complete` runs :meth:`complete` in the default
+    asyncio executor (thread pool), so sync-only backends get async support
+    for free.  Backends that natively support async I/O should override
+    :meth:`async_complete` directly.
 
     Backends must raise:
 
@@ -83,7 +93,7 @@ class LlmClient:
     """
 
     def complete(self, request: LlmRequest) -> LlmResponse:
-        """Send *request* to the LLM and return the raw response.
+        """Send *request* to the LLM and return the raw response (synchronous).
 
         Args:
             request: The prompt to send.
@@ -96,6 +106,25 @@ class LlmClient:
             LlmError:          Permanent failure.
         """
         raise NotImplementedError  # pragma: no cover
+
+    async def async_complete(self, request: LlmRequest) -> LlmResponse:
+        """Send *request* to the LLM and return the raw response (async).
+
+        The default implementation runs :meth:`complete` in the default
+        executor (thread pool).  Override this method for native async I/O.
+
+        Args:
+            request: The prompt to send.
+
+        Returns:
+            :class:`LlmResponse` with the model's raw text output.
+
+        Raises:
+            LlmTransientError: Retryable failure.
+            LlmError:          Permanent failure.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.complete, request)
 
 
 __all__ = [
