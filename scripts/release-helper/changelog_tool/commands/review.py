@@ -114,12 +114,32 @@ def _review(ctx: "CliContext", config: "Config") -> int:
     print(f"  external contributors:  {stats.get('external_contributors', 0)}")
     print()
 
-    # Stage 5.2 (T9) — not yet implemented.
+    # --- Stage 5.2: Review Data Preparation ---
+    from changelog_tool.review_formatter import generate_markdown_report, handle_overrides_file
+
     review_report_path = os.path.join(workdir, "05_review_report.md")
     overrides_path = os.path.join(workdir, "05_review_overrides.yaml")
-    print("Note: review report and overrides file (stage 5.2) not yet implemented.")
+
+    generate_markdown_report(result.verified, review_report_path)
+
+    # Handle overrides file safely (Spec §14.7)
+    action = "keep"
+    if os.path.exists(overrides_path):
+        # In a real interactive CLI, we would prompt the user here.
+        # For now, we default to "keep" as per the spec for non-interactive mode.
+        print(f"Overrides:\n  {overrides_path} already exists\n  Action: keep\n")
+    else:
+        print(f"Overrides:\n  Created {overrides_path}\n")
+
+    handle_overrides_file(result.verified, overrides_path, action=action)
+
+    print("Open:")
+    print(f"  {review_report_path}")
     print()
-    print("Next:")
+    print("If needed, edit:")
+    print(f"  {overrides_path}")
+    print()
+    print("Then run:")
     print("  changelog-tool report")
 
     return _EXIT_OK
