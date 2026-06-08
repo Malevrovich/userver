@@ -2,8 +2,8 @@
 
 Stages:
     1. Collect commits from git history.              ← T3
-    2. Identify external contributors.                ← T4 (this file)
-    3. Automatic pre-classification via heuristics.   ← T5
+    2. Identify external contributors.                ← T4
+    3. Automatic pre-classification via heuristics.   ← T5 (this file)
     4. LLM analysis of remaining commits (resumable). ← T7
 
 Outputs created by this command:
@@ -11,7 +11,7 @@ Outputs created by this command:
     .changelog/01_commits_manifest.json
     .changelog/02_commits_with_contributors.jsonl
     .changelog/02_external_contributors.md
-    .changelog/03_preclassified.jsonl              (T5)
+    .changelog/03_preclassified.jsonl
     .changelog/04_llm_classified.jsonl             (T7)
     .changelog/04_llm_classification_state.json    (T7)
 """
@@ -22,6 +22,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Dict, List, Set
 
+from changelog_tool.classifier import preclassify
 from changelog_tool.git import GitError, collect_commits, utc_now_iso
 from changelog_tool.io import (
     compute_sha_checksum,
@@ -76,10 +77,17 @@ def _collect(ctx: "CliContext", config: "Config") -> int:
         return exit_code
 
     # ------------------------------------------------------------------
-    # Stages 3–4: stubs (implemented in T5 and T7)
+    # Stage 3: heuristic pre-classification
+    # ------------------------------------------------------------------
+    exit_code = _run_stage3(config)
+    if exit_code != 0:
+        return exit_code
+
+    # ------------------------------------------------------------------
+    # Stage 4: LLM classification (stub — implemented in T7)
     # ------------------------------------------------------------------
     print()
-    print("Stages 3 (pre-classify), 4 (LLM): not yet implemented.")
+    print("Stage 4 (LLM): not yet implemented.")
     print()
     print("Next:")
     print("  changelog-tool review")
@@ -237,6 +245,56 @@ def _write_external_contributors_md(
 
     with open(path, "w", encoding="utf-8") as fh:
         fh.writelines(lines)
+
+
+# ---------------------------------------------------------------------------
+# Stage 3
+# ---------------------------------------------------------------------------
+
+
+def _run_stage3(config: "Config") -> int:
+    """Stage 3: heuristic pre-classification.
+
+    Reads:
+        <workdir>/02_commits_with_contributors.jsonl
+
+    Writes:
+        <workdir>/03_preclassified.jsonl
+
+    Returns 0 on success, non-zero on error.
+    """
+    print("\nPre-classifying commits...")
+
+    enriched_path = os.path.join(config.output.workdir, "02_commits_with_contributors.jsonl")
+    try:
+        commits = [commit_from_dict(d) for d in read_jsonl(enriched_path)]
+    except (OSError, Exception) as exc:
+        print(f"ERROR: could not read {enriched_path}: {exc}", file=sys.stderr)
+        return 1
+
+    preclassify(
+        commits=commits,
+        small_commit_threshold=config.thresholds.small_commit,
+        bugfix_skip_threshold=config.thresholds.bugfix_skip,
+    )
+
+    # Invariant: every commit must have auto_classification
+    for commit in commits:
+        if commit.auto_classification is None:
+            print(f"ERROR: commit {commit.sha} has no auto_classification", file=sys.stderr)
+            return 1
+
+    out_path = os.path.join(config.output.workdir, "03_preclassified.jsonl")
+    write_jsonl(out_path, [to_dict(c) for c in commits])
+    print(f"  Written: {out_path}")
+
+    # Summary
+    send_to_llm = sum(1 for c in commits if c.auto_classification.send_to_llm)  # type: ignore[union-attr]
+    skipped = len(commits) - send_to_llm
+    print(f"\n  Heuristics filtered: {skipped}")
+    print(f"  Sent to LLM:         {send_to_llm}")
+
+    return 0
 
 
 # ---------------------------------------------------------------------------
