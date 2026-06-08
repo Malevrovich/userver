@@ -1,0 +1,26 @@
+repo:
+  owner: userver-framework
+  name: userver
+  github_url: https://github.com/userver-framework/userver
+  local_path: ../..
+
+range:
+  from: 332799e3b82e4b84cc1d7a290cac8e7556eaba18  # T1 - config
+  to: HEAD
+
+thresholds:
+  small_commit: 50
+  bugfix_skip: 200
+
+llm:
+  batch_size: 20
+  max_prompt_chars: 50000
+
+core_team:
+  emails:
+    - ivan-skryabin@yandex-team.com
+    - dddccc20000@mail.ru
+    - antonyzhilin@userver.tech
+
+output:
+  workdir: .changelog
