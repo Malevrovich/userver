@@ -23,7 +23,8 @@ run_macos_ci_local.py — локальное воспроизведение .git
     --vm-name NAME    имя Lima VM (default: userver-ci)
     --build-dir DIR   путь внутри VM для сборки (default: /tmp/userver-build)
     --jobs N          параллельность cmake --build (default: все ядра хоста)
-    --cpus N          vCPU для VM (default: все ядра хоста)
+    --cpus N          vCPU для VM при сборке (default: все ядра хоста)
+    --test-cpus N     vCPU для VM при тестах (default: как --cpus, без переконфигурации)
     --memory GB       RAM для VM в GiB (default: 8)
     --disk GB         диск VM в GiB (default: 60)
     --skip-install    пропустить brew install (VM уже настроена)
@@ -404,6 +405,53 @@ def _restart_vm(vm_name: str) -> None:
     log_ok("VM перезапущена, virtiofs кэш сброшен")
 
 
+def _read_vm_cpus(vm_name: str) -> int | None:
+    """Читает текущее количество vCPU из lima.yaml VM. Возвращает None если файл не найден."""
+    config_path = _LIMA_DIR / vm_name / "lima.yaml"
+    if not config_path.exists():
+        return None
+    doc = yaml.safe_load(config_path.read_text())
+    cpus = doc.get("cpus")
+    return int(cpus) if cpus is not None else None
+
+
+def _reconfigure_vm_cpus(vm_name: str, target_cpus: int) -> int | None:
+    """
+    Переконфигурирует количество vCPU в lima.yaml и перезапускает VM.
+
+    Lima читает lima.yaml при каждом start — изменение конфига и перезапуск
+    достаточно для применения нового количества CPU. VM и все данные сохраняются.
+
+    Возвращает предыдущее количество vCPU (для восстановления), или None при ошибке.
+    """
+    current_cpus = _read_vm_cpus(vm_name)
+    if current_cpus is None:
+        log_error(f"Не удалось прочитать текущее количество vCPU из lima.yaml")
+        return None
+
+    if current_cpus == target_cpus:
+        log_ok(f"VM уже работает с {target_cpus} vCPU — переконфигурация не нужна")
+        return current_cpus
+
+    config_path = _LIMA_DIR / vm_name / "lima.yaml"
+    log_info(f"Переконфигурация VM: {current_cpus} -> {target_cpus} vCPU")
+    log_info(f"Редактирую {config_path}...")
+
+    raw = config_path.read_text()
+    doc = yaml.safe_load(raw)
+    doc["cpus"] = target_cpus
+
+    # Сериализуем обратно в YAML, сохраняя порядок ключей
+    config_path.write_text(yaml.dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False))
+
+    log_info(f"Перезапуск VM {vm_name} для применения {target_cpus} vCPU...")
+    run_host(["limactl", "stop", vm_name])
+    run_host(["limactl", "start", vm_name])
+    log_ok(f"VM перезапущена с {target_cpus} vCPU (было {current_cpus})")
+
+    return current_cpus
+
+
 def ensure_vm(vm_name: str, repo_root: Path, args: argparse.Namespace) -> None:
     log_section(f"Lima VM: {vm_name} (macOS 15 Sequoia)")
 
@@ -652,7 +700,11 @@ def parse_args(test_suites: list[str]) -> argparse.Namespace:
     p.add_argument("--jobs",   type=int, default=host_cpus,
                    help=f"параллельность cmake --build (default: {host_cpus})")
     p.add_argument("--cpus",   type=int, default=host_cpus,
-                   help=f"vCPU для VM (default: {host_cpus} — все ядра)")
+                   help=f"vCPU для VM при сборке (default: {host_cpus} — все ядра)")
+    p.add_argument("--test-cpus", type=int, default=None,
+                   help=f"vCPU для VM при тестах (default: как --cpus, без переконфигурации). "
+                        f"Если отличается от --cpus, VM будет перезапущена с новым количеством vCPU "
+                        f"перед тестами и восстановлена после.")
     p.add_argument("--memory", type=int, default=8,
                    help="RAM для VM в GiB (default: 8)")
     p.add_argument("--disk",   type=int, default=60,
@@ -760,12 +812,24 @@ def dump_logs(vm_name: str, vm_build_dir: str, dest: Path) -> None:
     log_info(f"Testsuite   : {yasuite_dest}")
 
 
+def _find_repo_root() -> Path:
+    """Определяет корень репозитория через git (не зависит от глубины расположения скрипта)."""
+    r = subprocess.run(
+        ["git", "-C", str(_SCRIPT_DIR), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        log_error("Не удалось определить корень репозитория (git rev-parse --show-toplevel)")
+        sys.exit(1)
+    return Path(r.stdout.strip())
+
+
 def main() -> None:
     if not run_host_ok(["limactl", "--version"]):
         log_error("limactl не найден. Установите: brew install lima")
         sys.exit(1)
 
-    repo_root = _SCRIPT_DIR.parent.parent
+    repo_root = _find_repo_root()
     workflow_path = repo_root / ".github" / "workflows" / "macos.yml"
 
     if not workflow_path.exists():
@@ -778,6 +842,10 @@ def main() -> None:
     test_suites = [s.name for s in wf.test_steps]
     args = parse_args(test_suites)
 
+    # --test-cpus по умолчанию = --cpus (без переконфигурации)
+    test_cpus = args.test_cpus if args.test_cpus is not None else args.cpus
+    need_cpu_reconfig = test_cpus != args.cpus
+
     log_section("userver macOS CI — Lima macOS 15 VM")
     log_info(f"Workflow     : {workflow_path.relative_to(repo_root)}")
     log_info(f"CMAKE_FLAGS  : {wf.cmake_flags}")
@@ -786,6 +854,8 @@ def main() -> None:
     log_info(f"VM name      : {args.vm_name}")
     log_info(f"Build dir    : {args.build_dir} (внутри VM)")
     log_info(f"VM resources : {args.cpus} vCPU, {args.memory}GiB RAM, {args.disk}GiB disk")
+    if need_cpu_reconfig:
+        log_info(f"Test vCPU    : {test_cpus} (переконфигурация перед тестами)")
     log_info(f"Jobs         : {args.jobs}")
 
     ensure_vm(args.vm_name, repo_root, args)
@@ -800,6 +870,17 @@ def main() -> None:
     else:
         log_info("--skip-build: пропуск cmake/compile шагов")
 
+    # ── Переконфигурация vCPU перед тестами ──────────────────────────────────
+    # Если --test-cpus отличается от --cpus, меняем количество vCPU в lima.yaml
+    # и перезапускаем VM. После тестов восстанавливаем исходное значение.
+    prev_cpus: int | None = None
+    if not args.skip_tests and need_cpu_reconfig:
+        log_section(f"Переконфигурация vCPU: {args.cpus} -> {test_cpus}")
+        prev_cpus = _reconfigure_vm_cpus(args.vm_name, test_cpus)
+        if prev_cpus is None:
+            log_error("Не удалось переконфигурировать vCPU — тесты запустятся с текущим количеством")
+            need_cpu_reconfig = False
+
     test_failed = False
     if not args.skip_tests:
         if args.test:
@@ -811,6 +892,16 @@ def main() -> None:
             test_failed = True
     else:
         log_info("--skip-tests: пропуск тестов")
+
+    # ── Восстановление vCPU после тестов ─────────────────────────────────────
+    if prev_cpus is not None and need_cpu_reconfig:
+        log_section(f"Восстановление vCPU: {test_cpus} -> {prev_cpus}")
+        restored = _reconfigure_vm_cpus(args.vm_name, prev_cpus)
+        if restored is not None:
+            log_ok(f"vCPU восстановлены: {prev_cpus} (следующая сборка будет быстрой)")
+        else:
+            log_warn(f"Не удалось восстановить vCPU — VM остаётся с {test_cpus} vCPU")
+            log_warn(f"Для ручного восстановления: отредактируйте ~/.lima/{args.vm_name}/lima.yaml")
 
     if not args.skip_tests and args.dump_logs:
         dump_logs(args.vm_name, args.build_dir, Path(args.dump_logs))
